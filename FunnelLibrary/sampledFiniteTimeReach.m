@@ -31,7 +31,7 @@ function [V,rho,Phi] = sampledFiniteTimeReach(sys,polyOrig,Vtraj0,G,tv,ts,xtraj0
 
 % Get the necessary variables
 t=msspoly('t',1);
-x=Vtraj0.getFrame.poly;
+x=Vtraj0.getFrame.getPoly;
 ts=ts(:);
 
 num_x = sys.getNumStates();
@@ -44,7 +44,7 @@ if options.saturations && (num_u > 1)
     error('Sorry, I cannot handle actuator saturations for systems with more than one actuator.')
 end
 
-u = polyOrig.getInputFrame.poly;
+u = polyOrig.getInputFrame.getPoly;
 
 % Default options
 if (nargin<9) options = struct(); end
@@ -88,7 +88,7 @@ for i=1:N
   
   fy{i} = sys.getPolyDynamics(ts(i));
   if (sys.getNumInputs>0)   % zero all inputs
-    fy{i} = subs(fy{i},sys.getInputFrame.poly,zeros(sys.getNumInputs,1));
+    fy{i} = subs(fy{i},sys.getInputFrame.getPoly,zeros(sys.getNumInputs,1));
   end
  
   forig_u{i} = polyOrig.p_dynamics_traj.eval(ts(i)); 
@@ -124,7 +124,7 @@ end
 
 % Initialize rho with "tube" constraints
 % rho = initializeRhoSPOT(V,Vdot,dts,options,x);
-
+%load inside_verification.mat
 save inside_verification.mat x Vtraj0 Vy ts forig_u Phi options u ui x utraj forig_u Vmin sys
 
 % ts = ts(1:3);
@@ -515,7 +515,7 @@ rho(1) = options.rho0;
 for k = 1:N
     rhonow = rho(k);
     rhomin = 0.5*rhonow;  
-    rhomax = 20*rhonow;
+    rhomax = 50*rhonow;
     rho(k+1) = fzero(@(rhonext) checkRho(Vtraj0,Vy,rhonext,utraj,ts,forig_u,Phi,dts,options,u,ui,x,k,rhonow,psys),[rhomin rhomax],optimset('TolX',1e-5));
     rho(k+1) = 1.001*rho(k+1); % To ensure feasibility
     
@@ -662,9 +662,9 @@ rho(1) = options.rho0;
 for k = 1:N
     rhonow = rho(k);
     rhomin = 0.5*rhonow;  
-    rhomax = 100*rhonow;
+    rhomax = 10*rhonow;
     rho(k+1) = fzero(@(rhonext) checkRho(Vtraj0,Vy,rhonext,utraj,ts,forig_u,Phi,dts,options,u,ui,x,k,rhonow,psys),[rhomin rhomax],optimset('TolX',1e-5));
-    rho(k+1) = 1.001*rho(k+1) % To ensure feasibility
+    rho(k+1) = 1.01*rho(k+1) % To ensure feasibility
 
 end
     
@@ -672,53 +672,60 @@ end
 
 function gamma = checkRho(Vtraj0,Vy,rhonext,utraj,ts,forig_u,Phi,dts,options,u,ui,x,k,rho,psys)
 % Compute rhodot
-    rhodot = (rhonext - rho)/dts(k);
+rhodot = (rhonext - rho)/dts(k);
 
-    prog = spotsosprog; % keyboard;
-    prog = prog.withIndeterminate(x);
-    
-    Phidotk = (Phi{k+1} - Phi{k})/(ts(k+1) - ts(k));
-    V0k = Vtraj0.getPoly(ts(k));
-    V0dotk = Vtraj0.getPolyTimeDeriv(ts(k));
-        
-    % Compute Vdot  
-    % Vdoty = diff(V0k,x)*xdk + V0dotk + 2*x'*Phi{k}*xdk + x'*Phidotk*x;
-    Vdoty = diff(V0k,x)*subss(forig_u{k},u,ui{k}) + V0dotk + 2*x'*Phi{k}*subss(forig_u{k},u,ui{k}) + x'*Phidotk*x;
-       
-    
-    % Vdoty = diff(V0k,x)*subs(psys.p_dynamics_traj.eval(ts(k)),u,zeros(4,1)) + V0dotk + 2*x'*Phi{k}*subss(forig_u{k},u,ui{k}) + x'*Phidotk*x;
-  
-    % keyboard;
-    
-    % Clean stuff
-    V = clean(Vy{k},options.clean_tol);
-    Vdoty = clean(Vdoty,options.clean_tol);
-    
-    % Declare multipliers
-    L1m = monomials(x,0:options.degL1);
-    [prog,l1] = prog.newFree(length(L1m));
-    % [prog,l1] = new(prog,length(L1m),'free');
-    L1 = l1'*L1m;
-    
-    % Create gammas
-   %  [prog,gamma] = prog.newPos(1);
-    [prog,gamma] = prog.newFree(1);
-    
-    % Declare SOS conditions
-    prog = prog.withSOS(-gamma*(x'*x)^(deg(Vdoty,x)/2) - Vdoty + rhodot + L1*(V-rho));
-    % prog = prog.withSOS(-gamma - Vdoty + rhodot + L1*(V-rho));
-  
-    % Solve SOS program 
-    pars = spot_sdp_default_options();
-    pars.verbose = 1;
-    % keyboard;
-    sol = prog.minimize(-gamma,@spot_mosek,pars); 
+prog = spotsosprog; % keyboard;
+prog = prog.withIndeterminate(x);
+
+Phidotk = (Phi{k+1} - Phi{k})/(ts(k+1) - ts(k));
+V0k = Vtraj0.getPoly(ts(k));
+V0dotk = Vtraj0.getPolyTimeDeriv(ts(k));
+
+% Compute Vdot
+% Vdoty = diff(V0k,x)*xdk + V0dotk + 2*x'*Phi{k}*xdk + x'*Phidotk*x;
+Vdoty = diff(V0k,x)*subss(forig_u{k},u,ui{k}) + V0dotk + 2*x'*Phi{k}*subss(forig_u{k},u,ui{k}) + x'*Phidotk*x;
+
+
+% Vdoty = diff(V0k,x)*subs(psys.p_dynamics_traj.eval(ts(k)),u,zeros(4,1)) + V0dotk + 2*x'*Phi{k}*subss(forig_u{k},u,ui{k}) + x'*Phidotk*x;
+
+% keyboard;
+
+% Clean stuff
+V = clean(Vy{k},options.clean_tol);
+Vdoty = clean(Vdoty,options.clean_tol);
+
+% Declare multipliers
+L1m = monomials(x,0:options.degL1);
+[prog,l1] = prog.newFree(length(L1m));
+% [prog,l1] = new(prog,length(L1m),'free');
+L1 = l1'*L1m;
+
+% Create gammas
+%  [prog,gamma] = prog.newPos(1);
+[prog,gamma] = prog.newFree(1);
+
+% Declare SOS conditions
+prog = prog.withSOS(-gamma*(x'*x)^(deg(Vdoty,x)/2) - Vdoty + rhodot + L1*(V-rho));
+% prog = prog.withSOS(-gamma - Vdoty + rhodot + L1*(V-rho));
+
+% Solve SOS program
+pars = spot_sdp_default_options();
+pars.verbose = 1;
+% keyboard;
+sol = prog.minimize(-gamma,@spot_mosek,pars);
+
+if strcmp(sol.info.solverInfo.itr.prosta,'PRIMAL_INFEASIBLE')
+    gamma = -1.0;
+else
     
     gamma = double(sol.eval(gamma));
     
+    if strcmp(sol.info.solverInfo.itr.prosta,'UNKNOWN')
+        gamma = -1.0;
+    end
+    
 end
-
-
+end
 
 
 
