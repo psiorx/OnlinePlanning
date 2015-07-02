@@ -1,156 +1,156 @@
 function [V,rho,Phi] = sampledFiniteTimeReach_B0(sys,polyOrig,Vtraj0,G,R0,tv,ts,xtraj0,utraj,options,Phi,rho)
-% % % Implements time-varying reachability computation.
-% % The approach searches for a Lyapunov function
-% % and attempts to minimize the size of the funnel.
-% %
-% % @param sys Taylor expanded closed loop system (with tvlqr)
-% % @param polyOrig Taylor expanded original system (not closed loop)
-% % @param Vtraj0 Initial guess for Lyapunov function
-% % @param G Target set description
-% % @param tv Tvlqr controller
-% % @param ts Time samples
-% % @param xtraj0 Nominal trajectory
-% % @param utraj Nominal control input
-% % @param options Options structure
-% %
-% % @option controller_deg Degree of controller to search for
-% % @option max_iterations Maximum number of iterations (3 steps per
-% % iteration)
-% % @option converged_tol Tolerance for convergence
-% % @option saturations True if input saturations exist, False if not
-% % @option rho0 Initial guess for rho
-% % @option clean_tol Tolerance for cleaning small terms
-% % @option backoff_percent Percentage to back off on objective (helps with
-% % numerics)
-% % @option degL1 Multiplier degree
-% % @option Lu Multiplier degree
-% % @option Lu1 Multiplier degree
-% % @option Lu2 Multiplier degree
-% % @option Lup Multiplier degree
-% % @option Lum Multiplier degree
-% 
-% % Get the necessary variables
-% t=msspoly('t',1);
-% x=Vtraj0.getFrame.getPoly;
-% ts=ts(:);
-% 
-% num_x = sys.getNumStates();
-% num_xd = sys.getNumDiscStates();
-% num_xc = sys.getNumContStates();
-% if (num_xd), xd = x(1:num_xd); x = x(num_xd + (1:num_xc)); end
-% num_u = sys.getNumInputs();
-% 
-% if options.saturations && (num_u > 1)
-%     error('Sorry, I cannot handle actuator saturations for systems with more than one actuator.')
+% % Implements time-varying reachability computation.
+% The approach searches for a Lyapunov function
+% and attempts to minimize the size of the funnel.
+%
+% @param sys Taylor expanded closed loop system (with tvlqr)
+% @param polyOrig Taylor expanded original system (not closed loop)
+% @param Vtraj0 Initial guess for Lyapunov function
+% @param G Target set description
+% @param tv Tvlqr controller
+% @param ts Time samples
+% @param xtraj0 Nominal trajectory
+% @param utraj Nominal control input
+% @param options Options structure
+%
+% @option controller_deg Degree of controller to search for
+% @option max_iterations Maximum number of iterations (3 steps per
+% iteration)
+% @option converged_tol Tolerance for convergence
+% @option saturations True if input saturations exist, False if not
+% @option rho0 Initial guess for rho
+% @option clean_tol Tolerance for cleaning small terms
+% @option backoff_percent Percentage to back off on objective (helps with
+% numerics)
+% @option degL1 Multiplier degree
+% @option Lu Multiplier degree
+% @option Lu1 Multiplier degree
+% @option Lu2 Multiplier degree
+% @option Lup Multiplier degree
+% @option Lum Multiplier degree
+
+% Get the necessary variables
+t=msspoly('t',1);
+x=Vtraj0.getFrame.getPoly;
+ts=ts(:);
+
+num_x = sys.getNumStates();
+num_xd = sys.getNumDiscStates();
+num_xc = sys.getNumContStates();
+if (num_xd), xd = x(1:num_xd); x = x(num_xd + (1:num_xc)); end
+num_u = sys.getNumInputs();
+
+if options.saturations && (num_u > 1)
+    error('Sorry, I cannot handle actuator saturations for systems with more than one actuator.')
+end
+
+u = polyOrig.getInputFrame.getPoly;
+
+% Default options
+if (nargin<10) options = struct(); end
+if (~isfield(options,'controller_deg')) options.controller_deg = 1; end % Degree of polynomial controller to search for
+if (~isfield(options,'max_iterations')) options.max_iterations = 10; end % Maximum number of iterations (3 steps per iteration)
+if (~isfield(options,'converged_tol')) options.converged_tol = 1e-3; end % Tolerance for checking convergence
+if (~isfield(options,'saturations')) options.saturations = false; end % Set whether or not there are any input saturations
+if (~isfield(options,'rho0')) options.rho0 = 0.1*ones(length(ts),1); options.rho0(end) = 1; end % Initial "guessed" rho
+if (~isfield(options,'clean_tol')) options.clean_tol = 1e-6; end % tolerance for cleaning small terms
+if (~isfield(options,'backoff_percent')) options.backoff_percent = 5; end % 5 percent backing off
+if (~isfield(options,'degL1')) options.degL1 = options.controller_deg + 1; end % Chosen to do degree matching
+if (~isfield(options,'degLu')) options.degLu = options.controller_deg - 1; end
+if (~isfield(options,'degLu1')) options.degLu1 = 2; end
+if (~isfield(options,'degLu2')) options.degLu2 = 2; end
+if (~isfield(options,'degLup')) options.degLup = 2; end
+if (~isfield(options,'degLum')) options.degLum = 2; end
+
+
+% if (isnumeric(G) && ismatrix(G) && all(size(G)==[num_xc,num_xc]))
+%   G = QuadraticLyapunovFunction(Vtraj0.getFrame,G);
 % end
-% 
-% u = polyOrig.getInputFrame.getPoly;
-% 
-% % Default options
-% if (nargin<10) options = struct(); end
-% if (~isfield(options,'controller_deg')) options.controller_deg = 1; end % Degree of polynomial controller to search for
-% if (~isfield(options,'max_iterations')) options.max_iterations = 10; end % Maximum number of iterations (3 steps per iteration)
-% if (~isfield(options,'converged_tol')) options.converged_tol = 1e-3; end % Tolerance for checking convergence
-% if (~isfield(options,'saturations')) options.saturations = false; end % Set whether or not there are any input saturations
-% if (~isfield(options,'rho0')) options.rho0 = 0.1*ones(length(ts),1); options.rho0(end) = 1; end % Initial "guessed" rho
-% if (~isfield(options,'clean_tol')) options.clean_tol = 1e-6; end % tolerance for cleaning small terms
-% if (~isfield(options,'backoff_percent')) options.backoff_percent = 5; end % 5 percent backing off
-% if (~isfield(options,'degL1')) options.degL1 = options.controller_deg + 1; end % Chosen to do degree matching
-% if (~isfield(options,'degLu')) options.degLu = options.controller_deg - 1; end
-% if (~isfield(options,'degLu1')) options.degLu1 = 2; end
-% if (~isfield(options,'degLu2')) options.degLu2 = 2; end
-% if (~isfield(options,'degLup')) options.degLup = 2; end
-% if (~isfield(options,'degLum')) options.degLum = 2; end
-% 
-% 
-% % if (isnumeric(G) && ismatrix(G) && all(size(G)==[num_xc,num_xc]))
-% %   G = QuadraticLyapunovFunction(Vtraj0.getFrame,G);
-% % end
-% % typecheck(G,'PolynomialLyapunovFunction');
-% typecheck(Vtraj0,'PolynomialLyapunovFunction');
-% 
-% 
-% % %% for now, let's require that G matches V at the final conditions
-% % if (~equalpoly(clean(G.getPoly(ts(end))),clean(Vtraj0.getPoly(ts(end)))))
-% %   error('for now, I require that G matches V at the final conditions');
-% % end
-% 
-% N = length(ts);
-% Vmin = zeros(N-1,1);
-% 
-% xdottraj = fnder(xtraj0);
-% sys = sys.inStateFrame(Vtraj0.getFrame); % convert system to Lyapunov function coordinates
-% polyOrig = polyOrig.inStateFrame(Vtraj0.getFrame); % convert polyOrig to Lyapunov function coordinates
-% 
-% % evaluate dynamics and Vtraj at every ts once (for efficiency/clarity)
-% for i=1:N
-%   x0=xtraj0.eval(ts(i)); x0=x0(num_xd+(1:num_xc));
-% 
-%   fy{i} = sys.getPolyDynamics(ts(i));
-%   if (sys.getNumInputs>0)   % zero all inputs
-%     fy{i} = subs(fy{i},sys.getInputFrame.getPoly,zeros(sys.getNumInputs,1));
-%   end
-% 
-%   forig_u{i} = polyOrig.p_dynamics_traj.eval(ts(i));
-% 
-%   if options.saturations
-%       forig_umax{i} = subss(polyOrig.p_dynamics_traj.eval(ts(i)),u,options.umax);
-%       forig_umin{i} = subss(polyOrig.p_dynamics_traj.eval(ts(i)),u,options.umin);
-%   end
-% 
-%   K = tv.D.eval(ts(i));
-%   ui{i} = utraj.eval(ts(i)) + K*x;
-% 
-%   % Initialize Phi
-%   if nargin < 11
-%       if i > 1
-%           Phi{i} = 0.0*eye(length(x));
-%       else
-%           Phi{i} = zeros(length(x),length(x));
-%       end
-%   end
-% 
-% 
-% 
-%   Vy{i} = Vtraj0.getPoly(ts(i)) + x'*Phi{i}*x;
-% 
-%   Vmin(i) =  minimumV(x,Vy{i});
-% 
-%   i
-% 
-% 
+% typecheck(G,'PolynomialLyapunovFunction');
+typecheck(Vtraj0,'PolynomialLyapunovFunction');
+
+
+% %% for now, let's require that G matches V at the final conditions
+% if (~equalpoly(clean(G.getPoly(ts(end))),clean(Vtraj0.getPoly(ts(end)))))
+%   error('for now, I require that G matches V at the final conditions');
 % end
-% 
-% 
-% % sys = sys.inStateFrame(Vtraj0.getFrame);
-% 
-% % Initialize rho with "tube" constraints
-% % rho = initializeRhoSPOT(V,Vdot,dts,options,x);
-% 
-% save inside_verification0.mat x Vtraj0 Vy ts forig_u options u ui x utraj forig_u Vmin sys Phi
-% 
-% dts = diff(ts);
-% 
+
+N = length(ts);
+Vmin = zeros(N-1,1);
+
+xdottraj = fnder(xtraj0);
+sys = sys.inStateFrame(Vtraj0.getFrame); % convert system to Lyapunov function coordinates
+polyOrig = polyOrig.inStateFrame(Vtraj0.getFrame); % convert polyOrig to Lyapunov function coordinates
+
+% evaluate dynamics and Vtraj at every ts once (for efficiency/clarity)
+for i=1:N
+  x0=xtraj0.eval(ts(i)); x0=x0(num_xd+(1:num_xc));
+
+  fy{i} = sys.getPolyDynamics(ts(i));
+  if (sys.getNumInputs>0)   % zero all inputs
+    fy{i} = subs(fy{i},sys.getInputFrame.getPoly,zeros(sys.getNumInputs,1));
+  end
+
+  forig_u{i} = polyOrig.p_dynamics_traj.eval(ts(i));
+
+  if options.saturations
+      forig_umax{i} = subss(polyOrig.p_dynamics_traj.eval(ts(i)),u,options.umax);
+      forig_umin{i} = subss(polyOrig.p_dynamics_traj.eval(ts(i)),u,options.umin);
+  end
+
+  K = tv.D.eval(ts(i));
+  ui{i} = utraj.eval(ts(i)) + K*x;
+
+  % Initialize Phi
+  if nargin < 11
+      if i > 1
+          Phi{i} = 0.5*eye(length(x));
+      else
+          Phi{i} = zeros(length(x),length(x));
+      end
+  end
+
+
+
+  Vy{i} = Vtraj0.getPoly(ts(i)) + x'*Phi{i}*x;
+
+  Vmin(i) =  minimumV(x,Vy{i});
+
+  i
+
+
+end
+
+
+% sys = sys.inStateFrame(Vtraj0.getFrame);
+
+% Initialize rho with "tube" constraints
+% rho = initializeRhoSPOT(V,Vdot,dts,options,x);
+
+save inside_verification0.mat x Vtraj0 Vy ts forig_u options u ui x utraj forig_u Vmin sys Phi
+
+dts = diff(ts);
+
 % options.max_iterations = 0;
-% 
-% % options.rho0 = 30/10000; % 30/10000
+
+% options.rho0 = 30/10000; % 30/10000
 % options.rho0 = 0.01; % % 0.005
-% 
+
 % options.rho0_tau = 10; % 2.2;
-% options.converged_tol = -Inf;
-% 
-% % Initialize rho
-% if nargin < 12
-%     % rho = exp(options.rho0_tau*(ts-ts(1))/(ts(end)-ts(1)))-1+options.rho0; %+max(Vmin);
-%     % [Vy,rho,Phi] = rhoAndVLineSearch(Vtraj0,Vy,utraj,ts,forig_u,Phi,dts,options,u,ui,x,sys);
-%     rho = rhoLineSearch(Vtraj0,Vy,utraj,ts,forig_u,Phi,dts,options,u,ui,x,sys);
-% end
-% 
-% rhodot = diff(rho)./dts;
+options.converged_tol = -Inf;
+
+% Initialize rho
+if nargin < 12
+    % rho = exp(options.rho0_tau*(ts-ts(1))/(ts(end)-ts(1)))-1+options.rho0; %+max(Vmin);
+    % [Vy,rho,Phi] = rhoAndVLineSearch(Vtraj0,Vy,utraj,ts,forig_u,Phi,dts,options,u,ui,x,sys);
+    rho = rhoLineSearch(Vtraj0,Vy,utraj,ts,forig_u,Phi,dts,options,u,ui,x,sys);
+end
+
+rhodot = diff(rho)./dts;
 
 % Phase I: Find initial condition set
-% save inside_verification1.mat x Vtraj0 Vy ts forig_u Phi options u ui x utraj forig_u Vmin sys rho rhodot dts
-load inside_verification1_in.mat
+ save inside_verification1.mat x Vtraj0 Vy ts forig_u Phi options u ui x utraj forig_u Vmin sys rho rhodot dts
+%load inside_verification1.mat
 
 G_end = (Vtraj0.S.eval(ts(end)) + Phi{end})/rho(end);
 G_end = G_end/5; % /2
@@ -159,10 +159,10 @@ G_end = G_end/5; % /2
 % G_end = G_end/5;
 
 % rho_fac = 0.2;
-[rho_fac,L_tau] = computeRhoFac(Vy{1},G,rho(1));
+[rho_fac,L_tau] = computeRhoFac(Vy{1},G,rho(1),x);
 rho_fac
 L_tau
-while rho_fac < 0.35 % 0.35 % 0.40 % 0.50 
+while rho_fac < 1.00 % 0.35 % 0.40 % 0.50 
         
     if options.saturations
         
@@ -270,7 +270,7 @@ end
 save inside_verification2.mat x Vtraj0 Vy ts forig_u Phi options u ui x utraj forig_u Vmin sys rho rhodot dts
 % load inside_verification2_in.mat
 
-options.max_iterations = 10; % 47; % 44
+% options.max_iterations = 10; % 47; % 44
 options.rho0 = rho(1);
 
 % Now, Phase II
@@ -310,25 +310,25 @@ for iter=1:options.max_iterations
                 
         % Second step: Fix L, search for V and rho
         options.rho_all = rho;
-        if iter <= 10
-         [Vy,rho,Phi] = findVRho_containG_vol(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack');
-        % [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'nohack'); % ,R0);
-        end
-        if (iter > 10) && (iter <= 20) 
-        % [Vy,rho,Phi] = findVRho_containG_vol(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack');
-          [Vy,rho,Phi] = findVRho_containG(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),R0);
-        % [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack'); % ,R0);
-        end
-        if (iter > 20) && (iter <= 40) 
-           [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'nohack'); % ,R0);    
-        end
-        if (iter > 40) && (iter <= 42)
-            [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack'); % ,R0);
-        end
+        %if iter <= 10
+         [Vy,rho,Phi] = findVRho_containG_vol(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'nohack');
+        %% [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'nohack'); % ,R0);
+        %end
+        %if (iter > 10) && (iter <= 20) 
+        %% [Vy,rho,Phi] = findVRho_containG_vol(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack');
+        %  [Vy,rho,Phi] = findVRho_containG(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),R0);
+        %% [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack'); % ,R0);
+        %end
+        % if (iter > 20) && (iter <= 40) 
+        %    [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'nohack'); % ,R0);    
+        % end
+        % if (iter > 40) && (iter <= 42)
+        %     [Vy,rho,Phi] = findVRho_containG_volproj(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack'); % ,R0);
+        % end
         
-        if (iter > 42)
-            [Vy,rho,Phi] = findVRho_containG_volproj_fixed_end(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack'); % ,R0);
-        end
+        % if (iter > 42)
+        %     [Vy,rho,Phi] = findVRho_containG_volproj_fixed_end(G,Vtraj0,ts,forig_u,Phi,options,x,u,ui,L1,0.99*rho_fac(end),rho,'hack'); % ,R0);
+        % end
         
         rhodot = diff(rho)./dts;
         %plot(ts,rho);
@@ -418,14 +418,14 @@ V = QuadraticLyapunovFunction(Vtraj0.getFrame,STraj,s1Traj,s2Traj);
 
 end
 
-function [rho_fac,L_tau] = computeRhoFac(V0,G,rho0)
+function [rho_fac,L_tau] = computeRhoFac(V0,G,rho0,x)
 
 prog = spotsosprog;
 
 [prog,rho_fac] = prog.newPos(1);
 
 [prog,L_tau] = prog.newPos(1);
-x = decomp(V0);
+% x = decomp(V0);
 prog = prog.withIndeterminate(x);
 % Make sure r0 sublevel set of x'*G*x is contained in Phid{1} ellipse
 % prog = prog.withSOS(rho0*rho_fac - V0 - tau*(1 - x'*G*x));
@@ -730,7 +730,7 @@ sol = prog.minimize(costfun,@spot_mosek,pars);
 %     disp('Backing off now...')
 
     % Back off on objective
-    options.backoff_percent = 2;
+    
     costfun_opt = double(sol.eval(costfun));
     % rhosum = double(sum(sol.eval(rho)));
     % prog = prog.withPos((-(1 - options.backoff_percent/100)*costfun_opt + costfun));
@@ -903,7 +903,7 @@ sol = prog.minimize(costfun,@spot_mosek,pars);
 %     disp('Backing off now...')
 
     % Back off on objective
-    options.backoff_percent = 1;
+    
     costfun_opt = double(sol.eval(costfun));
     % rhosum = double(sum(sol.eval(rho)));
     % prog = prog.withPos((-(1 - options.backoff_percent/100)*costfun_opt + costfun));
@@ -1270,7 +1270,7 @@ for k = [(N+1)]
     
 end
 
-costfun = costfun/(1000);
+costfun = costfun/(10);
 
 pars = spot_sdp_default_options();
 pars.verbose = 1;
@@ -1290,14 +1290,14 @@ sol = prog.minimize(costfun,@spot_mosek,pars);
     disp('Backing off now...')
 
     % Back off on objective
-    options.backoff_percent = 2;
+    % options.backoff_percent = 5;
     costfun_opt = double(sol.eval(costfun));
     % rhosum = double(sum(sol.eval(rho)));
     % prog = prog.withPos((-(1 - options.backoff_percent/100)*costfun_opt + costfun));
 
     prog = prog.withPos(costfun_opt + (options.backoff_percent/100)*abs(costfun_opt) - costfun);
 
-    sol = prog.minimize(0,@spot_mosek,pars);
+    sol = prog.minimize(0,@spot_sedumi,pars);
 
 %     if info.numerr == 2 || info.pinf == 1 || info.dinf == 1
 %         keyboard;
@@ -1451,7 +1451,7 @@ sol = prog.minimize(costfun,@spot_mosek,pars);
     disp('Backing off now...')
 
     % Back off on objective
-    options.backoff_percent = 1;
+    
     costfun_opt = double(sol.eval(costfun));
     % rhosum = double(sum(sol.eval(rho)));
     % prog = prog.withPos((-(1 - options.backoff_percent/100)*costfun_opt + costfun));
@@ -1646,7 +1646,6 @@ sol = prog.minimize(costfun,@spot_mosek,pars);
     disp('Backing off now...')
 
     % Back off on objective
-    options.backoff_percent = 2;
     costfun_opt = double(sol.eval(costfun));
     prog = prog.withPos(costfun_opt + (options.backoff_percent/100)*abs(costfun_opt) - costfun);
 
@@ -1847,7 +1846,7 @@ sol = prog.minimize(costfun,@spot_mosek,pars);
     disp('Backing off now...')
 
     % Back off on objective
-    options.backoff_percent = 2;
+    
     costfun_opt = double(sol.eval(costfun));
     prog = prog.withPos(costfun_opt + (options.backoff_percent/100)*abs(costfun_opt) - costfun);
 
@@ -2172,7 +2171,7 @@ for k = 1:N
     rhomin = 0.5*rhonow;
     rhomax = 10*rhonow; % 10
     rho(k+1) = fzero(@(rhonext) checkRho(Vtraj0,Vy,rhonext,utraj,ts,forig_u,Phi,dts,options,u,ui,x,k,rhonow,psys),[rhomin rhomax],optimset('TolX',1e-5));
-    rho(k+1) = 1.001*rho(k+1) % 1.001 To ensure feasibility
+    rho(k+1) = 1.01*rho(k+1) % 1.001 To ensure feasibility
     
 end
 
